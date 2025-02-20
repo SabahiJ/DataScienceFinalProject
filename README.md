@@ -12,3 +12,16 @@ This project applies Natural Language Processing (NLP) to classify consumer sent
 ✔ Store findings in structured reports with visualizations 
 
 ## 🔹 Repository Structure
+DataScienceFinalProject/
+│── data/                  # 📂 Contains dataset
+│   ├── financial_sentiment_dataset.csv  ✅ (Scraped News Data)
+│
+│── scripts/               # 📂 Contains Python scripts
+│   ├── scraper.py         ✅ (News scraping script)
+│
+│── notebooks/             # 📂 Jupyter Notebooks for analysis
+│   ├── sentiment_analysis.ipynb  ✅ (NLP processing & model training)
+│
+│── README.md              # 📄 Main project documentation
+│── requirements.txt       # 📄 Dependencies (for reproducibility)
+│── .gitignore             # 📄 Ignore unnecessary files
