@@ -63,3 +63,24 @@ df["Headline"] = df["Headline"].apply(lambda x: re.sub(r"[^a-zA-Z\s]", "", str(x
 # Save cleaned data
 df.to_csv("data/cleaned_sentiment_dataset.csv", index=False)
 
+from transformers import pipeline
+
+# Load FinBERT sentiment analysis model
+nlp = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+
+# Classify sentiment
+df["Sentiment"] = df["Headline"].apply(lambda x: nlp(x)[0]['label'])
+
+# Save dataset with sentiment
+df.to_csv("data/labeled_sentiment_dataset.csv", index=False)
+
+import matplotlib.pyplot as plt
+
+# Plot sentiment distribution
+df["Sentiment"].value_counts().plot(kind="bar", color=["green", "red", "blue"])
+plt.title("Financial Sentiment Distribution")
+plt.xlabel("Sentiment")
+plt.ylabel("Count")
+plt.show()
+
+
