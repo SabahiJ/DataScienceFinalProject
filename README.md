@@ -1,9 +1,9 @@
 # DataScienceFinalProject
 #Project Overview & Setup Instructions
-# Data Science Final Project - Financial Sentiment Analysis
+# Data Science Final Project - Financial Consumer Sentiment Analysis
 
 ## 📌 Project Overview
-This project applies Natural Language Processing (NLP) to classify financial sentiment (bullish, bearish, neutral) using news articles from Investopedia, Yahoo Finance, and MarketWatch.
+This project applies Natural Language Processing (NLP) to classify consumer sentiment using a dataset collected from financial news sources (Investopedia, Yahoo Finance, and MarketWatch).
 
 ## 🔹 Project Goals
 ✔ Collect and preprocess 5 years of financial news data  
