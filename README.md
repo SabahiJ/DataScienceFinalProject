@@ -4,7 +4,7 @@
 
 This project explores whether financial news sentiment can serve as a predictive signal for short-term stock price movement, using Nvidia Corporation (NVDA) as a case study. By leveraging FinBERT — a transformer-based NLP model fine-tuned on financial text — the project extracts sentiment from news headlines and compares these predictions against actual market movement and human-annotated labels.
 
-The tool was developed as part of a final-year undergraduate project in Data Science at the University of Westminster. The repository contains all source code, cleaned datasets, visualisations, and evaluation outputs in accordance with the data science lifecycle.
+The tool was developed as part of a final-year undergraduate project in Data Science at the University of Westminster. The repository contains all source code, cleaned datasets, visualisations, and evaluation outputs
 
 ---
 
