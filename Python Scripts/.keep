@@ -1,0 +1,585 @@
+Full Python Code
+! pip install transformers
+!pip install newsapi-python
+pip install huggingface_hub[hf_xet]
+
+# Phase 1: News Data Collection & Ingestion
+# Objective: Collect financial news headlines related to Nvidia Corporation (NVDA) and filter only those which include sentiment-indicative terminology relevant to market direction.
+
+# Step 1: Import required libraries for API access, file handling, and date-time manipulation
+import os                 # To create directories for file storage
+import time               # To manage API call rate limits
+import pandas as pd       # For data structure handling (DataFrames)
+from datetime import datetime, timedelta  # For managing time-based news filtering
+from newsapi import NewsApiClient         # NewsAPI client for fetching news headlines
+
+# Step 2: Configure NewsAPI client using the developer API key
+API_KEY = "6fc24465eeb54281b7efa2114bc22223"  # <-- This must be kept secure or replaced with an environment variable in production
+newsapi = NewsApiClient(api_key=API_KEY)
+os.makedirs("data", exist_ok=True) 
+
+# Step 3: Define the search query and a curated list of sentiment-driving keywords
+# The keywords reflect terminology often associated with financial sentiment and stock price movements
+query = "Nvidia OR NVDA"
+sentiment_keywords = [
+    "bullish", "bearish", "uptrend", "downtrend", "rally", "plunge", "spike", "drop",
+    "soar", "slump", "decline", "jump", "rebound", "surge", "fall", "gain", "beat estimates",
+    "miss estimates", "guidance", "forecast", "warning", "record high", "record low",
+    "growth", "slowdown", "volatile", "volatility", "recession", "earnings", "strong results",
+    "disappoint", "underperform", "outperform", "loss", "profit", "buy", "sell", "upgrade", "downgrade"
+]
+
+# Step 4: Define a custom function to determine if a headline contains any sentiment keyword
+# This serves as a filter to retain only sentiment-relevant news items
+def is_sentiment_relevant(headline):
+    headline = str(headline).lower()
+    return any(keyword in headline for keyword in sentiment_keywords)
+
+# Step 5: Prepare a storage list to accumulate filtered articles
+filtered_articles = []
+
+# Step 6: Define scraping range
+# Set a 30-day window, divided into 6-day intervals to avoid hitting API limits
+end_date = datetime.today()
+start_date = end_date - timedelta(days=30)
+interval_days = 6
+
+# Step 7: Iteratively query NewsAPI for each 6-day window and collect articles
+while start_date < end_date:
+    slice_from = start_date.strftime('%Y-%m-%d')
+    slice_to = (start_date + timedelta(days=interval_days)).strftime('%Y-%m-%d')
+
+    try:
+        print(f"Fetching headlines from {slice_from} to {slice_to}...")
+        
+        # Perform API request with date filtering and sorting by publication time
+        response = newsapi.get_everything(
+            q=query,                         # Search query for NVDA or Nvidia
+            language="en",                   # Restrict results to English
+            from_param=slice_from,
+            to=slice_to,
+            sort_by="publishedAt",           # Sort results by time
+            page_size=100,                   # Fetch maximum articles per page
+            page=1                           # Only the first page due to API free-tier limits
+        )
+
+        # Step 8: For each article, retain only if it matches sentiment keywords
+        for article in response.get("articles", []):
+            headline = article["title"]
+            if is_sentiment_relevant(headline):  # Apply sentiment filter
+                filtered_articles.append([
+                    article["publishedAt"][:10],   # Extract only the date part
+                    "Nvidia",                      # Static label for stock
+                    article["source"]["name"],     # Source publisher name
+                    headline,                      # Original article headline
+                    article["url"]                 # URL to the full article
+                ])
+        
+        # Pause to respect API rate limits and avoid blocking
+        time.sleep(1)
+
+    except Exception as e:
+        # Error handling in case the API request fails
+        print(f"Error fetching from {slice_from} to {slice_to}: {e}")
+
+    # Step 9: Advance the start date to the next 6-day window
+    start_date += timedelta(days=interval_days)
+
+# Step 10: Convert the collected results into a structured DataFrame and save as CSV
+# This will serve as the raw input for later sentiment analysis
+df_filtered = pd.DataFrame(
+    filtered_articles,
+    columns=["Date", "Stock", "Source", "Headline", "URL"]
+)
+df_filtered.to_csv("data/nvidia_news_raw.csv", index=False)  # Export to CSV
+
+# Step 11: Provide terminal feedback on total number of filtered headlines collected
+print(f"{len(df_filtered)} sentiment-relevant Nvidia headlines saved to 'data/nvidia_news_raw.csv'")
+
+# Phase 2: Sentiment Classification with FinBERT + Data Cleaning
+# Objective: Clean and preprocess financial headlines and apply a domain-specific transformer model (FinBERT) to extract sentiment polarity (positive, negative, neutral) and map it to market-relevant categories.
+
+# Step 1: Import required libraries
+import os                  # For file and directory operations
+import pandas as pd        # For structured data handling
+import re                  # For text pattern matching and regular expressions
+from transformers import pipeline  # HuggingFace pipeline abstraction for NLP model inference
+
+# Step 2: Ensure the output directory exists
+# Safeguard to make sure results can be written to the file system
+os.makedirs("data", exist_ok=True)
+
+# Step 3: Load raw financial headlines scraped in Phase 1
+# Input: CSV file containing date, source, headline, and URL
+input_path = "data/nvidia_news_raw.csv"
+df = pd.read_csv(input_path)
+
+# Step 4: Data cleaning - Remove null or duplicated headline entries
+# Purpose: Avoid redundant or meaningless sentiment evaluations
+df.dropna(subset=['Headline'], inplace=True)         # Remove rows with missing headlines
+df.drop_duplicates(subset='Headline', inplace=True)  # Remove repeated news entries
+
+# Step 5: Define a reusable cleaning function to standardise headline text
+# Incorporates preprocessing techniques drawn from data engineering pipelines
+def clean_text(text):
+    text = str(text).lower()  # Convert all text to lowercase for uniformity
+    text = re.sub(r"http\S+|www\S+|https\S+", '', text, flags=re.MULTILINE)  # Remove URLs
+    text = re.sub(r'\@w+|\#','', text)     # Remove Twitter handles or hashtags
+    text = re.sub(r'[^A-Za-z0-9\s]', '', text)  # Remove non-alphanumeric characters (punctuation, symbols)
+    text = re.sub(r'\s+', ' ', text).strip()    # Normalize whitespace and trim
+    return text
+
+# Step 6: Apply text cleaning to each headline using vectorised Pandas operation
+# Result: New column 'Clean_Headline' for model input
+df['Clean_Headline'] = df['Headline'].apply(clean_text)
+
+# Step 7: Load the pre-trained FinBERT model via HuggingFace's pipeline interface
+# FinBERT is trained specifically on financial news text, making it domain-appropriate
+finbert = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+
+# Step 8: Define a helper function to extract sentiment label and confidence score
+# Output format: ('positive', 0.98) or similar, encapsulated in a tuple
+def analyze_sentiment(text):
+    result = finbert(text)[0]  # Access first result in list of predictions
+    return result['label'], result['score']
+
+# Step 9: Apply FinBERT to all cleaned headlines
+# Vectorised row-wise application and unpacking results into new DataFrame columns
+df[['FinBERT_Label', 'FinBERT_Score']] = df['Clean_Headline'].apply(lambda x: pd.Series(analyze_sentiment(x)))
+
+# Step 10: Translate FinBERT labels into market sentiment categories
+# This aligns the NLP output with domain-specific financial language
+label_map = {
+    "positive": "bullish",   # Implies upward price movement
+    "negative": "bearish",   # Implies downward price movement
+    "neutral": "neutral"     # Implies little or no expected movement
+}
+df['Sentiment_Class'] = df['FinBERT_Label'].str.lower().map(label_map)
+
+# Step 11: Export the enriched and labeled dataset for downstream analysis
+# Output includes: original, cleaned text, sentiment labels and scores
+output_path = "data/nvidia_news_sentiment_labeled.csv"
+df.to_csv(output_path, index=False)
+
+# Step 12: Print status message to confirm successful export and data volume
+print(f"{len(df)} sentiment-labeled and preprocessed Nvidia headlines saved to '{output_path}'")
+
+# Phase 3: Merge & Match Sentiment with Market Movement
+# Objective: Align sentiment-labeled financial headlines with corresponding stock price movements to evaluate whether the predicted sentiment matches the actual market direction.
+
+# Step 1: Import libraries for data manipulation
+import pandas as pd  # Core library for tabular data analysis and joining datasets
+
+# Step 2: Load sentiment-labeled headline dataset and historical price data
+# These datasets are the output from Phase 2 (NLP) and an external stock price source
+price_df = pd.read_csv("/Download Data - STOCK_US_XNAS_NVDA.csv")  # Historical stock prices
+sentiment_df = pd.read_csv("/content/data/nvidia_news_sentiment_labeled.csv")  # Sentiment-labeled headlines
+
+# Step 3: Prepare the price data for joining
+# Convert 'Date' to a consistent format and ensure necessary columns are present
+price_df.rename(columns={'Date': 'Date', 'Open': 'Open', 'Close': 'Close'}, inplace=True)  
+price_df['Date'] = pd.to_datetime(price_df['Date']).dt.strftime('%Y-%m-%d')  # Standardise to YYYY-MM-DD
+
+# Step 4: Format sentiment dates to match the price data format
+sentiment_df['Date'] = pd.to_datetime(sentiment_df['Date']).dt.strftime('%Y-%m-%d')  
+
+# Step 5: Perform an inner join to combine sentiment data with stock prices by date
+# Only retains days where both sentiment and stock prices are available
+merged_df = pd.merge(sentiment_df, price_df[['Date', 'Open', 'Close']], on='Date', how='inner')
+
+# Step 6: Create a new column indicating actual price direction
+# Logic: If Close > Open → bullish day; otherwise → bearish
+merged_df['Price_Direction'] = merged_df.apply(
+    lambda row: 'bullish' if row['Close'] > row['Open'] else 'bearish',
+    axis=1
+)
+
+# Step 7: Evaluate sentiment prediction accuracy against market direction
+# If predicted sentiment class matches price direction → sentiment was correct
+merged_df['Sentiment_Correct'] = merged_df['Sentiment_Class'] == merged_df['Price_Direction']
+
+# Step 8: Retain only relevant features for evaluation and visualization
+# Streamline output to include necessary columns for analysis and plotting
+final_df = merged_df[[
+    'Date',               # Date of headline and price
+    'Headline',           # Original headline text
+    'Sentiment_Class',    # Predicted sentiment (bullish, bearish, neutral)
+    'FinBERT_Score',      # Confidence score from FinBERT model
+    'Open', 'Close',      # Market opening and closing prices
+    'Price_Direction',    # Actual direction of price movement
+    'Sentiment_Correct'   # Boolean indicator: was the sentiment accurate?
+]]
+
+# Step 9: Export the merged and evaluated dataset for later visualisation and statistics
+final_df.to_csv("/content/data/nvidia_sentiment_vs_market.csv", index=False)
+
+# Step 10: Output summary statistics to console
+# Reports alignment rate: how often sentiment matched market movement
+accuracy = final_df['Sentiment_Correct'].mean()
+print(f"{len(final_df)} rows merged. Sentiment aligned with price movement on {accuracy:.2%} of days.")
+
+# Phase 4 - Part A: Model Evaluation
+# Objective: Evaluate the accuracy and performance of FinBERT sentiment predictions by comparing them 
+# to manually labeled ground-truth data. This supports quantitative validation of the sentiment classification tool.
+
+# Step 1: Import required libraries for metrics and evaluation
+import pandas as pd  # For handling structured tabular data
+from sklearn.metrics import (
+    accuracy_score,         # Measures overall proportion of correct predictions
+    precision_score,        # Evaluates model's exactness (minimising false positives)
+    recall_score,           # Measures model's completeness (minimising false negatives)
+    f1_score,               # Harmonic mean of precision and recall
+    confusion_matrix,       # Tabular summary of classification performance
+    classification_report   # Comprehensive text report (per class metrics)
+)
+
+# Step 2: Load the manually labeled evaluation dataset
+# Dataset was created by manually annotating a sample of headlines from the FinBERT predictions
+df = pd.read_csv("/nvidia_news_labeled_.csv")
+
+# Step 3: Clean and standardise both label columns to lowercase
+# Ensures label format consistency before comparison (e.g., 'Positive' vs 'positive')
+df['Manual_Label'] = df['Manual_Label'].str.strip().str.lower()     # Ground truth
+df['FinBERT_Label'] = df['FinBERT_Label'].str.strip().str.lower()   # Model predictions
+
+# Step 4: Define the true and predicted labels
+# Extract the label columns into separate variables for evaluation functions
+y_true = df['Manual_Label']       # Ground-truth labels provided by manual human evaluation
+y_pred = df['FinBERT_Label']      # Labels generated by FinBERT
+
+# Step 5: Compute quantitative evaluation metrics
+accuracy = accuracy_score(y_true, y_pred)                     # Overall match between predicted and actual
+precision = precision_score(y_true, y_pred, average='weighted')  # Precision across all classes
+recall = recall_score(y_true, y_pred, average='weighted')        # Recall across all classes
+f1 = f1_score(y_true, y_pred, average='weighted')                # F1-score balances precision and recall
+conf_matrix = confusion_matrix(y_true, y_pred)                   # Generate confusion matrix
+report = classification_report(y_true, y_pred)                   # Class-wise breakdown of metrics
+
+# Step 6: Output results to console for analysis and reporting
+print("Model Evaluation Results (FinBERT vs Manual Labels)")
+print("---------------------------------------------------")
+print(f"Accuracy Score:  {accuracy:.4f}")        # E.g., 0.767 means 76.7% predictions were correct
+print(f"Precision Score: {precision:.4f}")       # Reflects reliability of positive predictions
+print(f"Recall Score:    {recall:.4f}")          # Reflects how well the model retrieved all true labels
+print(f"F1 Score:        {f1:.4f}")              # Reflects overall classification performance
+
+print("\nConfusion Matrix:")                     # Useful for identifying misclassification patterns
+print(conf_matrix)
+
+print("\nClassification Report:")                # Includes support, precision, recall per class
+print(report)
+
+# Phase 4 - Part B: Evaluate FinBERT sentiment vs market movement
+# Step 1: Load sentiment-market merged file
+df_market = pd.read_csv("data/nvidia_sentiment_vs_market.csv")
+
+# Step 2: Compute signal success rate
+total_rows = len(df_market)
+correct = df_market['Sentiment_Correct'].sum()
+accuracy = correct / total_rows
+
+# Step 3: Print result
+print("\nSentiment Signal Evaluation (FinBERT Sentiment vs Price Direction)")
+print("------------------------------------------------------------------")
+print(f"Signal Accuracy: {accuracy:.2%} ({correct} out of {total_rows} correct)")
+
+#Phase 5 –  Data Visualisation - EDA Word Cloud
+# Step 1: Import libraries
+import pandas as pd
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
+
+# Step 2: Load your sentiment-labeled dataset
+df = pd.read_csv("data/nvidia_news_sentiment_labeled.csv")
+
+# Step 3: Join all cleaned headlines into a single string
+text = ' '.join(df['Clean_Headline'].dropna().astype(str))
+
+# Step 4: Generate the word cloud
+wordcloud = WordCloud(width=1000, height=500, background_color='white').generate(text)
+
+# Step 5: Plot it
+plt.figure(figsize=(12, 6))
+plt.imshow(wordcloud, interpolation='bilinear')
+plt.axis('off')
+plt.title("Word Cloud of Nvidia Financial Headlines", fontsize=16)
+plt.tight_layout()
+plt.show()
+
+# Distribution of Sentiment Labels (FinBERT Output)
+#Step 1: Import libraries
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Step 2: Load the labeled dataset
+df = pd.read_csv("data/nvidia_news_sentiment_labeled.csv")
+
+# Step 3: Count occurrences of each sentiment class
+sentiment_counts = df['FinBERT_Label'].value_counts().sort_index()
+
+# Step 4: Plot bar chart
+plt.figure(figsize=(8, 5))
+sentiment_counts.plot(kind='bar', color='skyblue', edgecolor='black')
+plt.title("FinBERT Sentiment Label Distribution", fontsize=14)
+plt.xlabel("Sentiment")
+plt.ylabel("Number of Headlines")
+plt.xticks(rotation=0)
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.show()
+
+# Sentiment by News Source (Grouped Bar Chart)
+#Step 1: Import libraries
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Step 2: Load sentiment-labeled data
+df = pd.read_csv("data/nvidia_news_sentiment_labeled.csv")
+
+# Step 3: Count sentiment occurrences per news source
+source_sentiment = df.groupby(['Source', 'FinBERT_Label']).size().unstack().fillna(0)
+
+# Optional: Limit to top 5 most frequent sources for clarity
+top_sources = df['Source'].value_counts().nlargest(5).index
+source_sentiment = source_sentiment.loc[top_sources]
+
+# Step 4: Plot grouped bar chart
+source_sentiment.plot(kind='bar', figsize=(10, 6), edgecolor='black')
+
+# Step 5: Aesthetic adjustments
+plt.title("Sentiment Distribution by News Source", fontsize=14)
+plt.xlabel("News Source")
+plt.ylabel("Number of Headlines")
+plt.xticks(rotation=45)
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.legend(title="Sentiment")
+plt.tight_layout()
+plt.show()
+
+# Sentiment Trend Over Time (Line Plot)
+# Step 1: Import libraries
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Step 2: Load data
+df = pd.read_csv("data/nvidia_news_sentiment_labeled.csv")
+
+# Step 3: Preprocess for time series
+df['Date'] = pd.to_datetime(df['Date'])
+df_grouped = df.groupby(['Date', 'Sentiment_Class']).size().unstack(fill_value=0)
+
+# Step 4: Plot the sentiment trend
+df_grouped.plot(figsize=(12, 6), linewidth=2)
+
+# Step 5: Aesthetics
+plt.title("Daily Sentiment Trend for Nvidia Headlines", fontsize=14)
+plt.xlabel("Date")
+plt.ylabel("Number of Headlines")
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.legend(title="Sentiment")
+plt.tight_layout()
+plt.show()
+
+# Confusion Matrix (FinBERT vs Manual Labels)
+#Step 1: Import libraries
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
+
+# Step 2: Load evaluation data
+df = pd.read_csv("/nvidia_news_labeled_.csv")
+df['Manual_Label'] = df['Manual_Label'].str.strip().str.lower()
+df['FinBERT_Label'] = df['FinBERT_Label'].str.strip().str.lower()
+
+# Step 3: Generate confusion matrix
+labels = ['negative', 'neutral', 'positive']
+cm = confusion_matrix(df['Manual_Label'], df['FinBERT_Label'], labels=labels)
+
+# Step 4: Plot confusion matrix heatmap
+plt.figure(figsize=(6, 5))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=labels, yticklabels=labels)
+plt.title("Confusion Matrix: FinBERT vs Manual Labels", fontsize=14)
+plt.xlabel("Predicted Label")
+plt.ylabel("Actual Label")
+plt.tight_layout()
+plt.show()
+
+# Precision, Recall, and F1-Score (Grouped Bar)
+# Step 1: Import required libraries
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report
+
+# Step 2: Load labeled evaluation dataset
+df = pd.read_csv("/nvidia_news_labeled_.csv")
+df['Manual_Label'] = df['Manual_Label'].str.strip().str.lower()
+df['FinBERT_Label'] = df['FinBERT_Label'].str.strip().str.lower()
+
+# Step 3: Generate classification report as dictionary
+report = classification_report(df['Manual_Label'], df['FinBERT_Label'], output_dict=True, zero_division=0)
+
+# Step 4: Create DataFrame for plotting
+df_report = pd.DataFrame(report).T.loc[['negative', 'neutral', 'positive'], ['precision', 'recall', 'f1-score']]
+
+# Step 5: Plot grouped bar chart
+df_report.plot(kind='bar', figsize=(9, 6), edgecolor='black')
+plt.title("Classification Metrics by Sentiment Class", fontsize=14)
+plt.ylabel("Score")
+plt.ylim(0, 1)
+plt.xticks(rotation=0)
+plt.grid(axis='y', linestyle='--', alpha=0.5)
+plt.legend(title="Metric")
+plt.tight_layout()
+plt.show()
+
+# Price Change vs Sentiment (Boxplot)
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Step 1: Load merged dataset (includes sentiment + price data)
+df = pd.read_csv("data/nvidia_sentiment_vs_market.csv")
+
+# Step 2: Compute daily price change
+df['Price_Change_%'] = ((df['Close'] - df['Open']) / df['Open']) * 100
+
+# Step 3: Plot boxplot grouped by sentiment
+plt.figure(figsize=(8, 5))
+sns.boxplot(data=df, x='Sentiment_Class', y='Price_Change_%', palette='pastel')
+plt.title("Price Change by FinBERT Sentiment Class", fontsize=14)
+plt.xlabel("Sentiment Class")
+plt.ylabel("Daily Price Change (%)")
+plt.grid(axis='y', linestyle='--', alpha=0.5)
+plt.tight_layout()
+plt.show()
+
+#Sentiment vs Price Direction (Stacked Bar)
+# Step 1: Cross-tabulate Sentiment Class vs Price Direction
+stacked_data = df.groupby(['Sentiment_Class', 'Price_Direction']).size().unstack(fill_value=0)
+
+# Step 2: Plot stacked bar chart
+stacked_data.plot(kind='bar', stacked=True, figsize=(9, 6), edgecolor='black')
+
+# Step 3: Aesthetics
+plt.title("Price Direction by Sentiment Class", fontsize=14)
+plt.xlabel("Sentiment Class")
+plt.ylabel("Number of Headlines")
+plt.xticks(rotation=0)
+plt.legend(title="Price Direction")
+plt.grid(axis='y', linestyle='--', alpha=0.5)
+plt.tight_layout()
+plt.show()
+
+#Heatmap — Sentiment vs Volume Correlation
+df = pd.read_csv("data/nvidia_sentiment_vs_market.csv")
+df['Sentiment_Binary'] = df['Sentiment_Class'].map({'bullish': 1, 'bearish': -1, 'neutral': 0})
+df[['Open', 'Close']] = df[['Open', 'Close']].astype(float)
+
+# Create correlation matrix
+cor_matrix = df[['Sentiment_Binary', 'Close', 'Open']].corr()
+
+sns.heatmap(cor_matrix, annot=True, cmap='coolwarm', fmt=".2f")
+plt.title("Correlation Between Sentiment and Market Prices")
+plt.tight_layout()
+plt.show()
+
+# Radar Chart – Sentiment Class Comparison of Key Metrics
+# Objective: Visualise FinBERT's classification performance (precision, recall, F1) for each sentiment class
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report
+
+# Step 1: Load the manually labeled evaluation dataset
+df = pd.read_csv("data/nvidia_news_labeled_.csv")  # Update with your correct path if different
+df['Manual_Label'] = df['Manual_Label'].str.strip().str.lower()
+df['FinBERT_Label'] = df['FinBERT_Label'].str.strip().str.lower()
+
+# Step 2: Generate classification report
+report = classification_report(df['Manual_Label'], df['FinBERT_Label'], output_dict=True, zero_division=0)
+
+# Step 3: Define target classes and metrics
+classes = ['positive', 'neutral', 'negative']
+metrics = ['precision', 'recall', 'f1-score']
+
+# Step 4: Extract precision, recall, F1-score for each sentiment class
+values = [[report[c][m] for m in metrics] for c in classes]
+
+# Step 5: Set up radar plot structure
+angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False).tolist()
+angles += angles[:1]  # complete the circle
+
+# Step 6: Plot radar chart
+fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
+
+for i, row in enumerate(values):
+    row += row[:1]  # repeat first value to close shape
+    ax.plot(angles, row, label=classes[i])
+    ax.fill(angles, row, alpha=0.1)
+
+# Step 7: Aesthetic adjustments
+ax.set_theta_offset(np.pi / 2)
+ax.set_theta_direction(-1)
+ax.set_thetagrids(np.degrees(angles[:-1]), metrics)
+plt.title("Classification Metric Comparison by Sentiment Class", fontsize=13)
+plt.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
+plt.tight_layout()
+plt.show()
+
+# Radar Chart – Sentiment Class Comparison of Key Metrics
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report
+
+# Step 1: Load the manually labeled evaluation dataset
+df = pd.read_csv("/content/nvidia_news_labeled_.csv")  #
+df['Manual_Label'] = df['Manual_Label'].str.strip().str.lower()
+df['FinBERT_Label'] = df['FinBERT_Label'].str.strip().str.lower()
+
+# Step 2: Generate classification report
+report = classification_report(df['Manual_Label'], df['FinBERT_Label'], output_dict=True, zero_division=0)
+
+# Step 3: Define target classes and metrics
+classes = ['positive', 'neutral', 'negative']
+metrics = ['precision', 'recall', 'f1-score']
+
+# Step 4: Extract precision, recall, F1-score for each sentiment class
+values = [[report[c][m] for m in metrics] for c in classes]
+
+# Step 5: Set up radar plot structure
+angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False).tolist()
+angles += angles[:1]  # complete the circle
+
+# Step 6: Plot radar chart
+fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
+
+for i, row in enumerate(values):
+    row += row[:1]  # repeat first value to close shape
+    ax.plot(angles, row, label=classes[i])
+    ax.fill(angles, row, alpha=0.1)
+
+# Step 7: Aesthetic adjustments
+ax.set_theta_offset(np.pi / 2)
+ax.set_theta_direction(-1)
+ax.set_thetagrids(np.degrees(angles[:-1]), metrics)
+plt.title("Classification Metric Comparison by Sentiment Class", fontsize=13)
+plt.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
+plt.tight_layout()
+plt.show()
+
+import pandas as pd
+from IPython.display import display
+
+summary = pd.DataFrame({
+    'Metric': ['Accuracy', 'Precision', 'Recall', 'F1 Score', 'Market Match Accuracy'],
+    'Score': [0.767, 0.785, 0.767, 0.768, 0.4286]
+})
+
+summary['Score'] = summary['Score'].apply(lambda x: f"{x*100:.2f}%")
+display(summary)
+
+
