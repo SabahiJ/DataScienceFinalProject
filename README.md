@@ -20,13 +20,43 @@ The tool was developed as part of a final-year undergraduate project in Data Sci
 ---
 
 ## 📂 Repository Structure
+.
+├── data/
+│   ├── nvidia_news_raw.csv         # Raw headlines from NEWSAPI
+│   ├── nvidia_news_labeled.csv     # Manually labeled subset of 30 headlines
+│   ├── STOCK_US_XNAS_NVDA.csv      # Historical stock data from MarketWatch
+├── Financial_Sentiment_Tool.ipynb  # Main analysis notebook
+├── README.md                       # Project documentation
 
-📁 data/
-├── nvidia_news_raw.csv
-├── nvidia_news_sentiment_labeled.csv
-├── nvidia_news_labeled_.csv
-├── nvidia_sentiment_vs_market.csv
-└── Download Data - STOCK_US_XNAS_NVDA.csv
 
-📁 notebooks/
-└── Data_Science_Final_Project_Financial_Sentiment_Tool.ipynb
+| Component              | Tool/Library                  | Purpose                                             |
+| ---------------------- | ----------------------------- | --------------------------------------------------- |
+| **Sentiment Analysis** | \[FinBERT (via Transformers)] | Classify headlines into positive, negative, neutral |
+| **Data Analysis**      | pandas, numpy                 | Data wrangling, cleaning, aggregation               |
+| **Visualization**      | matplotlib, seaborn           | Plot sentiment trends, confusion matrices           |
+| **Data Sources**       | NEWSAPI, MarketWatch          | Real-world news and price data for Nvidia           |
+
+News Headlines:
+Collected using the NEWSAPI Python client.
+
+Search term: "Nvidia"
+
+Source types: Reputable financial and tech media outlets.
+
+Period: ~3 weeks (April–May 2025)
+
+Sample size: 106 headlines
+
+2. Stock Prices:
+Retrieved from MarketWatch (via CSV export)
+
+Columns: Open, Close, High, Low, Volume
+
+Matching date range with headline data.
+
+
+
+
+
+
+
